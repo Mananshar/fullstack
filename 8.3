@@ -1,0 +1,48 @@
+// server.js
+import express from "express";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
+import mongoose from "mongoose";
+import dotenv from "dotenv";
+dotenv.config();
+const app = express();
+app.use(express.json());
+mongoose.connect(process.env.MONGO_URI);
+const userSchema = new mongoose.Schema({
+  username: String,
+  password: String,
+  role: { type: String, enum: ["admin", "user", "moderator"], default: "user" }
+});
+const User = mongoose.model("User", userSchema);
+const generateToken = (user) => jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
+const auth = (roles = []) => {
+  if (typeof roles === "string") roles = [roles];
+  return (req, res, next) => {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) return res.sendStatus(401);
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      if (roles.length && !roles.includes(decoded.role)) return res.sendStatus(403);
+      req.user = decoded;
+      next();
+    } catch {
+      res.sendStatus(403);
+    }
+  };
+};
+app.post("/register", async (req, res) => {
+  const { username, password, role } = req.body;
+  const hash = await bcrypt.hash(password, 10);
+  const user = await User.create({ username, password: hash, role });
+  res.json({ id: user._id });
+});
+app.post("/login", async (req, res) => {
+  const { username, password } = req.body;
+  const user = await User.findOne({ username });
+  if (!user || !(await bcrypt.compare(password, user.password))) return res.sendStatus(401);
+  res.json({ token: generateToken(user) });
+});
+app.get("/admin", auth("admin"), (req, res) => res.json({ message: "Welcome Admin" }));
+app.get("/moderator", auth(["admin", "moderator"]), (req, res) => res.json({ message: "Welcome Moderator" }));
+app.get("/user", auth(["admin", "moderator", "user"]), (req, res) => res.json({ message: "Welcome User" }));
+app.listen(3000, () => console.log("Server running"));
